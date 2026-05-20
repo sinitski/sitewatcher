@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { ArrowLeft, Send, CheckCircle, Copy } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, Send, CheckCircle, Copy, Mail } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import api from '../api'
@@ -14,6 +14,11 @@ export default function SettingsPage() {
   const [applyingCode, setApplyingCode] = useState(false)
   const [applyMessage, setApplyMessage] = useState('')
   const [applyError, setApplyError] = useState('')
+  const [emailAlertsEnabled, setEmailAlertsEnabled] = useState(false)
+  const [alertEmails, setAlertEmails] = useState('')
+  const [savingNotifications, setSavingNotifications] = useState(false)
+  const [notificationMessage, setNotificationMessage] = useState('')
+  const [notificationError, setNotificationError] = useState('')
 
   const fetchLink = async () => {
     if (!user?.upgrade_token) return
@@ -28,7 +33,14 @@ export default function SettingsPage() {
     }
   }
 
-  useEffect(() => { fetchLink() }, [user?.upgrade_token])
+  useEffect(() => {
+    fetchLink()
+  }, [user?.upgrade_token])
+
+  useEffect(() => {
+    setEmailAlertsEnabled(Boolean(user?.notifications?.email_alerts_enabled))
+    setAlertEmails((user?.notifications?.alert_emails || []).join(', '))
+  }, [user?.notifications?.email_alerts_enabled, user?.notifications?.alert_emails])
 
   const copy = () => {
     navigator.clipboard.writeText(telegramLink)
@@ -63,6 +75,33 @@ export default function SettingsPage() {
     }
   }
 
+  const saveEmailNotifications = async (e) => {
+    e.preventDefault()
+    setNotificationMessage('')
+    setNotificationError('')
+    setSavingNotifications(true)
+    try {
+      const emails = alertEmails
+        .split(/[;,\n]/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+
+      const { data } = await api.patch('/auth/me/notifications', {
+        email_alerts_enabled: emailAlertsEnabled,
+        alert_emails: emails,
+      })
+
+      setNotificationMessage('Email notifications saved.')
+      setEmailAlertsEnabled(Boolean(data?.notifications?.email_alerts_enabled))
+      setAlertEmails((data?.notifications?.alert_emails || []).join(', '))
+      await refetchUser()
+    } catch (err) {
+      setNotificationError(err?.response?.data?.detail || 'Failed to save email notifications')
+    } finally {
+      setSavingNotifications(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-surface">
       <div className="max-w-2xl mx-auto px-4 py-6">
@@ -72,7 +111,6 @@ export default function SettingsPage() {
 
         <h1 className="text-xl font-bold mb-6">Settings</h1>
 
-        {/* Account */}
         <div className="card mb-4">
           <h2 className="font-semibold mb-3">Account</h2>
           <div className="space-y-2 text-sm">
@@ -84,6 +122,12 @@ export default function SettingsPage() {
               <span className="text-gray-500">Plan</span>
               <span className={user?.is_paid ? 'text-brand-500' : 'text-gray-400'}>
                 {user?.is_paid ? '⭐ Pro' : '🆓 Free'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Email status</span>
+              <span className={user?.email_verified ? 'text-emerald-400' : 'text-amber-400'}>
+                {user?.email_verified ? 'Verified' : 'Pending verification'}
               </span>
             </div>
             <div className="flex justify-between">
@@ -141,7 +185,6 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* Telegram */}
         <div className="card mb-4">
           <div className="flex items-center gap-2 mb-1">
             <Send size={16} className="text-brand-500" />
@@ -192,7 +235,51 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* Upgrade */}
+        <div className="card mb-4">
+          <div className="flex items-center gap-2 mb-1">
+            <Mail size={16} className="text-brand-500" />
+            <h2 className="font-semibold">Email Alerts</h2>
+          </div>
+          <p className="text-sm text-gray-500 mb-4">
+            Send the same alerts to one or more email addresses in addition to Telegram.
+          </p>
+          {!user?.is_paid && (
+            <p className="text-xs text-amber-400 mb-3">
+              Free plan limit: 1 email alert per 24 hours.
+            </p>
+          )}
+
+          <form onSubmit={saveEmailNotifications} className="space-y-3">
+            <label className="flex items-center gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={emailAlertsEnabled}
+                onChange={(e) => setEmailAlertsEnabled(e.target.checked)}
+              />
+              Enable email alerts
+            </label>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Alert emails</label>
+              <textarea
+                className="input min-h-[90px]"
+                value={alertEmails}
+                onChange={(e) => setAlertEmails(e.target.value)}
+                placeholder="ops@example.com, team@example.com"
+              />
+              <p className="text-xs text-gray-600 mt-1">
+                Separate multiple addresses with commas or new lines.
+              </p>
+            </div>
+
+            {notificationMessage && <p className="text-xs text-green-400">{notificationMessage}</p>}
+            {notificationError && <p className="text-xs text-red-400">{notificationError}</p>}
+
+            <button className="btn-primary text-sm" disabled={savingNotifications}>
+              {savingNotifications ? 'Saving...' : 'Save email alerts'}
+            </button>
+          </form>
+        </div>
+
         {!user?.is_paid && (
           <div className="card border-brand-500/30 bg-brand-500/5">
             <h2 className="font-semibold mb-1">Upgrade to Pro</h2>

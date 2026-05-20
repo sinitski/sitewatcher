@@ -130,6 +130,8 @@ export default function Dashboard() {
               <SiteCard
                 key={site.id}
                 site={site}
+                minInterval={user?.limits?.min_interval || 60}
+                isPaid={Boolean(user?.is_paid)}
                 onRefresh={fetchSites}
                 onDelete={(id) => setSites((s) => s.filter((x) => x.id !== id))}
               />

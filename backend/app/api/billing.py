@@ -29,7 +29,10 @@ STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "").strip()
 
 async def _stripe_post(path: str, data: dict) -> dict:
     if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Card payments are temporarily unavailable. Ask the site owner to configure Stripe (STRIPE_SECRET_KEY).",
+        )
 
     url = f"https://api.stripe.com/v1/{path.lstrip('/')}"
     async with httpx.AsyncClient(timeout=30.0) as client:

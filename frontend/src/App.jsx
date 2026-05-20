@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './store/auth'
 import AuthPage from './pages/AuthPage'
 import Dashboard from './pages/Dashboard'
@@ -24,7 +24,7 @@ function PublicRoute({ children }) {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <HashRouter>
         <Routes>
           {/* Landing page at root */}
           <Route path="/" element={<PublicRoute><LandingPage /></PublicRoute>} />
@@ -35,7 +35,7 @@ export default function App() {
           <Route path="/upgrade" element={<PrivateRoute><UpgradePage /></PrivateRoute>} />
           <Route path="/status/:username" element={<StatusPage />} />
         </Routes>
-      </BrowserRouter>
+      </HashRouter>
     </AuthProvider>
   )
 }

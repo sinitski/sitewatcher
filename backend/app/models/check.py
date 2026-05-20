@@ -18,4 +18,5 @@ class CheckLog(Base):
     content_hash = Column(String, nullable=True)
 
     alert_sent = Column(Boolean, default=False)
+    email_sent = Column(Boolean, default=False)
     alert_type = Column(String, nullable=True)  # "down" | "slow" | "changed" | "recovered"

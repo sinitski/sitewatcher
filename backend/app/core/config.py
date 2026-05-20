@@ -10,6 +10,11 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = ""
     FRONTEND_URL: str = "http://localhost:3000"
+    BACKEND_URL: str = "http://localhost:8000"
+    GMAIL_CLIENT_ID: str = ""
+    GMAIL_CLIENT_SECRET: str = ""
+    GMAIL_REFRESH_TOKEN: str = ""
+    GMAIL_SENDER_EMAIL: str = ""
 
     # Free tier limits
     FREE_TIER_MAX_SITES: int = 1

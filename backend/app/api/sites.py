@@ -207,6 +207,7 @@ async def get_logs(
             "error_message": l.error_message,
             "content_changed": l.content_changed,
             "alert_sent": l.alert_sent,
+            "email_sent": l.email_sent,
             "alert_type": l.alert_type,
         }
         for l in logs

@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, and_
@@ -14,6 +15,7 @@ from app.services.telegram import (
     format_alert_slow,
     format_alert_changed,
 )
+from app.services.email import send_alert_email, split_email_list
 from app.services.ai_analysis import analyze_downtime, analyze_content_diff
 from app.services.weekly_report import send_weekly_reports
 
@@ -50,6 +52,23 @@ async def _get_recent_incidents(db, site_id: int, limit: int = 5) -> list[dict]:
                 "duration_min": check.response_time,
             })
     return incidents[-limit:]
+
+
+async def _free_email_quota_available(db, user_id: int) -> bool:
+    day_ago = datetime.utcnow() - timedelta(days=1)
+    result = await db.execute(
+        select(CheckLog.id)
+        .join(Site, Site.id == CheckLog.site_id)
+        .where(
+            and_(
+                Site.user_id == user_id,
+                CheckLog.email_sent == True,
+                CheckLog.checked_at >= day_ago,
+            )
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is None
 
 
 async def run_checks():
@@ -101,44 +120,42 @@ async def process_site_check(site_id: int):
 
         if not is_up and prev_status != "down":
             alert_type = "down"
-            if user and user.telegram_chat_id and site.alert_on_down:
-                recent_incidents = await _get_recent_incidents(db, site_id)
-                ai_insight = await analyze_downtime(
-                    site_name=site.name or site.url,
-                    site_url=site.url,
-                    error_message=error_message,
-                    status_code=status_code,
-                    recent_incidents=recent_incidents,
-                )
+            if site.alert_on_down:
                 plain_alert = format_alert_down(site.name, site.url, error_message, status_code)
-                if ai_insight:
-                    alert_text = plain_alert + f"\n\n🤖 <i>{ai_insight}</i>"
-                else:
-                    alert_text = plain_alert
+                alert_text = plain_alert
+                if user and user.telegram_chat_id:
+                    recent_incidents = await _get_recent_incidents(db, site_id)
+                    ai_insight = await analyze_downtime(
+                        site_name=site.name or site.url,
+                        site_url=site.url,
+                        error_message=error_message,
+                        status_code=status_code,
+                        recent_incidents=recent_incidents,
+                    )
+                    if ai_insight:
+                        alert_text = plain_alert + f"\n\n🤖 <i>{ai_insight}</i>"
 
         elif is_up and prev_status == "down":
             alert_type = "recovered"
-            if user and user.telegram_chat_id:
-                alert_text = format_alert_recovered(site.name, site.url, response_time or 0)
+            alert_text = format_alert_recovered(site.name, site.url, response_time or 0)
 
         elif is_up and site.monitor_response_time and site.alert_on_slow:
             if response_time and response_time > site.response_time_threshold:
                 alert_type = "slow"
-                if user and user.telegram_chat_id:
-                    alert_text = format_alert_slow(
-                        site.name, site.url, response_time, site.response_time_threshold
-                    )
+                alert_text = format_alert_slow(
+                    site.name, site.url, response_time, site.response_time_threshold
+                )
 
         # ── Content change detection ──────────────────────────────────────────
         content_changed = False
         if is_up and site.monitor_content_changes and prev_hash and content_hash:
             if prev_hash != content_hash:
                 content_changed = True
-                if not alert_type and site.alert_on_change and user and user.telegram_chat_id:
+                if not alert_type:
                     alert_type = "changed"
 
-                    # Pro-only AI diff analysis
-                    if user.is_paid and prev_snapshot and new_raw_text:
+                    # Pro-only AI diff analysis (Telegram only)
+                    if user and user.is_paid and user.telegram_chat_id and prev_snapshot and new_raw_text:
                         ai_diff = await analyze_content_diff(
                             site_name=site.name or site.url,
                             site_url=site.url,
@@ -152,13 +169,38 @@ async def process_site_check(site_id: int):
                             )
                         else:
                             alert_text = format_alert_changed(site.name, site.url)
-                    else:
+                    elif site.alert_on_change:
                         alert_text = format_alert_changed(site.name, site.url)
 
         # Send alert
-        alert_sent = False
+        telegram_sent = False
+        email_sent = False
         if alert_text and user and user.telegram_chat_id:
-            alert_sent = await send_telegram_message(user.telegram_chat_id, alert_text)
+            telegram_sent = await send_telegram_message(user.telegram_chat_id, alert_text)
+
+        if alert_text and user and user.email_verified and user.email_alerts_enabled:
+            can_send_email = True
+            if not user.is_paid:
+                can_send_email = await _free_email_quota_available(db, user.id)
+                if not can_send_email:
+                    logger.info("Free-tier email alert skipped due to daily quota (user_id=%s)", user.id)
+
+            if can_send_email:
+                recipients = split_email_list(user.alert_emails) or [user.email]
+                subject_map = {
+                    "down": f"SiteWatcher alert: {site.name or site.url} is down",
+                    "recovered": f"SiteWatcher alert: {site.name or site.url} recovered",
+                    "slow": f"SiteWatcher alert: {site.name or site.url} is slow",
+                    "changed": f"SiteWatcher alert: {site.name or site.url} changed",
+                }
+                subject = subject_map.get(alert_type or "down", f"SiteWatcher alert: {site.name or site.url}")
+                html_body = alert_text.replace("\n", "<br>")
+                text_body = re.sub(r"<[^>]+>", "", alert_text)
+                for recipient in recipients:
+                    sent = await send_alert_email(recipient, subject, html_body, text_body)
+                    email_sent = email_sent or sent
+
+        alert_sent = telegram_sent or email_sent
 
         # Log the check
         log = CheckLog(
@@ -170,6 +212,7 @@ async def process_site_check(site_id: int):
             content_changed=content_changed,
             content_hash=content_hash,
             alert_sent=alert_sent,
+            email_sent=email_sent,
             alert_type=alert_type,
         )
         db.add(log)

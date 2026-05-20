@@ -1,6 +1,6 @@
 # 📡 SiteWatcher
 
-> Website uptime monitoring with real-time Telegram alerts.
+> Website uptime monitoring with real-time Telegram and email alerts.
 
 **Live demo (frontend):** https://sitewatcher-six.vercel.app
 **Live API (backend):** https://sitewatch-1k5k.onrender.com
@@ -11,6 +11,8 @@
 
 - **Uptime monitoring** — checks your sites every 1–60 minutes
 - **Telegram alerts** — instant notifications when a site goes down or recovers
+- **Email alerts** — optional additional notifications via Resend
+- **Email confirmation** — new accounts must confirm their address before signing in
 - **Response time tracking** — detects slow responses before users notice
 - **Content change detection** — alerts when page content changes (Pro)
 - **Check history** — full log with response times and status codes
@@ -27,7 +29,7 @@
 | Auth | JWT (python-jose) + bcrypt |
 | HTTP checks | httpx (async) |
 | Content diff | BeautifulSoup4 + MD5 hash |
-| Notifications | Telegram Bot API |
+| Notifications | Telegram Bot API + Resend |
 | Payments | Telegram Stars |
 | Frontend | React 18, Vite, Tailwind CSS |
 | Deploy | Docker, Render.com |
@@ -74,6 +76,9 @@ Edit `backend/.env`:
 DATABASE_URL=postgresql+asyncpg://user:password@db:5432/sitewatcher
 SECRET_KEY=your-secret-key-here
 TELEGRAM_BOT_TOKEN=your-bot-token
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
+RESEND_FROM_EMAIL=no-reply@example.com
+RESEND_FROM_NAME=SiteWatcher
 FRONTEND_URL=http://localhost:5173
 ADMIN_SECRET=your-admin-secret
 ENV=development
@@ -106,8 +111,10 @@ python3 setup_webhook.py http://your-public-url.com
 
 ```
 POST /api/auth/register     Register new user
+GET  /api/auth/verify-email Confirm email via link
 POST /api/auth/login        Login, returns JWT
 GET  /api/auth/me           Current user info
+PATCH /api/auth/me/notifications  Configure email alerts
 
 GET  /api/sites/            List monitored sites
 POST /api/sites/            Add site (free: 1, pro: 50)
@@ -159,6 +166,9 @@ STRIPE_SECRET_KEY    # Stripe secret key
 STRIPE_WEBHOOK_SECRET # Stripe webhook signing secret
 STRIPE_SUCCESS_URL   # Stripe success redirect URL
 STRIPE_CANCEL_URL    # Stripe cancel redirect URL
+RESEND_API_KEY       # Resend API key (resend.com)
+RESEND_FROM_EMAIL    # Verified sender email
+RESEND_FROM_NAME     # Optional sender display name
 ENV                  # production (hides /docs)
 ```
 

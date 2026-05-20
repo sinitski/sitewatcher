@@ -4,13 +4,18 @@ import { StatusBadge } from './StatusBadge'
 import api from '../api'
 import SiteLogsPanel from './SiteLogsPanel'
 
-export default function SiteCard({ site, onRefresh, onDelete }) {
+export default function SiteCard({ site, onRefresh, onDelete, minInterval = 60, isPaid = false }) {
   const [expanded, setExpanded] = useState(false)
   const [checking, setChecking] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState(null)
   const [applyingThreshold, setApplyingThreshold] = useState(false)
+  const [editingInterval, setEditingInterval] = useState(false)
+  const [newInterval, setNewInterval] = useState(site.check_interval)
+  const [savingInterval, setSavingInterval] = useState(false)
+  const [savingContentMonitoring, setSavingContentMonitoring] = useState(false)
+  const [savingChangeAlerts, setSavingChangeAlerts] = useState(false)
 
   const checkNow = async (e) => {
     e.stopPropagation()
@@ -67,6 +72,52 @@ export default function SiteCard({ site, onRefresh, onDelete }) {
     }
   }
 
+  const saveInterval = async () => {
+    if (newInterval < minInterval) {
+      alert(`Minimum interval is ${minInterval} minutes`)
+      setNewInterval(site.check_interval)
+      setEditingInterval(false)
+      return
+    }
+    setSavingInterval(true)
+    try {
+      await api.patch(`/sites/${site.id}`, { check_interval: parseInt(newInterval) })
+      setEditingInterval(false)
+      onRefresh()
+    } catch (err) {
+      alert('Failed to update interval')
+      setNewInterval(site.check_interval)
+    } finally {
+      setSavingInterval(false)
+    }
+  }
+
+  const cancelEditInterval = () => {
+    setNewInterval(site.check_interval)
+    setEditingInterval(false)
+  }
+
+  const toggleContentMonitoring = async () => {
+    if (!isPaid) return
+    setSavingContentMonitoring(true)
+    try {
+      await api.patch(`/sites/${site.id}`, { monitor_content_changes: !site.monitor_content_changes })
+      onRefresh()
+    } finally {
+      setSavingContentMonitoring(false)
+    }
+  }
+
+  const toggleChangeAlerts = async () => {
+    setSavingChangeAlerts(true)
+    try {
+      await api.patch(`/sites/${site.id}`, { alert_on_change: !site.alert_on_change })
+      onRefresh()
+    } finally {
+      setSavingChangeAlerts(false)
+    }
+  }
+
   const lastChecked = site.last_checked_at
     ? new Date(site.last_checked_at).toLocaleString()
     : 'Never'
@@ -102,7 +153,40 @@ export default function SiteCard({ site, onRefresh, onDelete }) {
                 ⚡ {site.last_response_time.toFixed(2)}s
               </span>
             )}
-            <span>⏱ every {site.check_interval}min</span>
+            {editingInterval ? (
+              <div className="flex items-center gap-1 bg-panel/60 border border-gray-600 rounded px-2 py-1">
+                <input
+                  type="number"
+                  min={minInterval}
+                  value={newInterval}
+                  onChange={(e) => setNewInterval(e.target.value)}
+                  className="w-12 bg-transparent text-gray-300 outline-none text-xs"
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <span className="text-xs text-gray-500">min</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); saveInterval() }}
+                  disabled={savingInterval}
+                  className="ml-1 text-xs text-green-400 hover:text-green-300 disabled:text-gray-600"
+                >
+                  {savingInterval ? '...' : '✓'}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); cancelEditInterval() }}
+                  className="text-xs text-gray-500 hover:text-gray-400"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <span
+                className="cursor-pointer hover:text-gray-300 transition-colors"
+                onClick={(e) => { e.stopPropagation(); setEditingInterval(true) }}
+                title="Click to edit"
+              >
+                ⏱ every {site.check_interval}min
+              </span>
+            )}
             <span>checked {lastChecked}</span>
           </div>
         </div>
@@ -176,6 +260,40 @@ export default function SiteCard({ site, onRefresh, onDelete }) {
 
       {expanded && (
         <div className="mt-4 pt-4 border-t border-border">
+          <div className="mb-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <div>
+                <p className="text-gray-300">Content monitoring</p>
+                <p className="text-xs text-gray-500">Detect page content changes</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleContentMonitoring}
+                disabled={!isPaid || savingContentMonitoring}
+                className={`w-11 h-6 rounded-full transition-colors ${site.monitor_content_changes ? 'bg-brand-500' : 'bg-gray-700'} ${!isPaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title={!isPaid ? 'Pro only' : 'Toggle content monitoring'}
+              >
+                <span className={`block w-4 h-4 bg-white rounded-full mx-1 transition-transform ${site.monitor_content_changes ? 'translate-x-5' : ''}`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-sm">
+              <div>
+                <p className="text-gray-300">Alert on content change</p>
+                <p className="text-xs text-gray-500">Send alerts when content changes are detected</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleChangeAlerts}
+                disabled={!isPaid || savingChangeAlerts}
+                className={`w-11 h-6 rounded-full transition-colors ${site.alert_on_change ? 'bg-brand-500' : 'bg-gray-700'} ${(!isPaid || savingChangeAlerts) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title={!isPaid ? 'Pro only' : 'Toggle content change alerts'}
+              >
+                <span className={`block w-4 h-4 bg-white rounded-full mx-1 transition-transform ${site.alert_on_change ? 'translate-x-5' : ''}`} />
+              </button>
+            </div>
+          </div>
+
           <SiteLogsPanel siteId={site.id} />
         </div>
       )}
