@@ -1,13 +1,10 @@
-import hashlib
-import hmac
-import json
 import os
-import time
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from app.api.auth import get_current_active_user
 from app.core.config import settings
@@ -15,67 +12,62 @@ from app.db.database import get_db
 from app.models.payment import PaymentLog
 from app.models.user import User
 from app.services.telegram import send_telegram_message
+from app.services.events import log_product_event
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 PRICE_STARS = 500  # Telegram Stars for Pro (~$10)
-STRIPE_AMOUNT_USD = 999  # Stripe Checkout price in USD (one-time payment)
+PAYPAL_AMOUNT_USD = "9.99"  # PayPal order amount in USD (one-time payment)
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
-STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", "").strip()
-STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "").strip()
+PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
+PAYPAL_SUCCESS_URL = os.getenv("PAYPAL_SUCCESS_URL", "").strip()
+PAYPAL_CANCEL_URL = os.getenv("PAYPAL_CANCEL_URL", "").strip()
+PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox").strip().lower()
 
 
-async def _stripe_post(path: str, data: dict) -> dict:
-    if not STRIPE_SECRET_KEY:
+def _paypal_base_url() -> str:
+    return "https://api-m.paypal.com" if PAYPAL_MODE == "live" else "https://api-m.sandbox.paypal.com"
+
+
+async def _paypal_access_token() -> str:
+    if not PAYPAL_CLIENT_ID or not PAYPAL_CLIENT_SECRET:
         raise HTTPException(
             status_code=503,
-            detail="Card payments are temporarily unavailable. Ask the site owner to configure Stripe (STRIPE_SECRET_KEY).",
+            detail=(
+                "Card payments are temporarily unavailable. "
+                "Ask the site owner to configure PayPal (PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET)."
+            ),
         )
 
-    url = f"https://api.stripe.com/v1/{path.lstrip('/')}"
+    url = f"{_paypal_base_url()}/v1/oauth2/token"
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             url,
-            headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}"},
-            data=data,
+            auth=(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET),
+            data={"grant_type": "client_credentials"},
         )
     if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Stripe error: {response.text}")
+        raise HTTPException(status_code=502, detail=f"PayPal auth error: {response.text}")
+
+    token = response.json().get("access_token")
+    if not token:
+        raise HTTPException(status_code=502, detail="PayPal auth error: no access_token in response")
+    return token
+
+
+async def _paypal_api_post(path: str, payload: dict) -> dict:
+    token = await _paypal_access_token()
+    url = f"{_paypal_base_url()}/{path.lstrip('/')}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"PayPal error: {response.text}")
     return response.json()
-
-
-def _verify_stripe_signature(payload: bytes, signature_header: str) -> bool:
-    if not STRIPE_WEBHOOK_SECRET:
-        return False
-
-    parts: dict[str, list[str]] = {}
-    for item in signature_header.split(","):
-        if "=" in item:
-            key, value = item.split("=", 1)
-            parts.setdefault(key, []).append(value)
-
-    timestamp = parts.get("t", [None])[0]
-    signatures = parts.get("v1", [])
-    if not timestamp or not signatures:
-        return False
-
-    try:
-        timestamp_int = int(timestamp)
-    except ValueError:
-        return False
-
-    if abs(time.time() - timestamp_int) > 300:
-        return False
-
-    signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
-    expected = hmac.new(
-        STRIPE_WEBHOOK_SECRET.encode("utf-8"),
-        signed_payload,
-        hashlib.sha256,
-    ).hexdigest()
-    return any(hmac.compare_digest(expected, sig) for sig in signatures)
 
 
 # ── Telegram Stars ───────────────────────────────────────────────────────────
@@ -109,86 +101,96 @@ async def send_stars_invoice(
     return {"ok": True, "message": "Invoice sent to Telegram"}
 
 
-# ── Stripe Checkout ──────────────────────────────────────────────────────────
+# ── PayPal Checkout ──────────────────────────────────────────────────────────
 
 
-@router.post("/stripe-checkout")
-async def create_stripe_checkout(
+@router.post("/paypal-checkout")
+async def create_paypal_checkout(
     user: User = Depends(get_current_active_user),
 ):
-    """Create a Stripe Checkout session for Pro."""
+    """Create a PayPal order for Pro and return approval URL."""
     if user.is_paid:
         raise HTTPException(status_code=400, detail="Already Pro")
 
-    success_url = STRIPE_SUCCESS_URL or f"{settings.FRONTEND_URL}/upgrade?stripe=success"
-    cancel_url = STRIPE_CANCEL_URL or f"{settings.FRONTEND_URL}/upgrade?stripe=cancel"
+    success_url = PAYPAL_SUCCESS_URL or f"{settings.FRONTEND_URL}/upgrade?paypal=success"
+    cancel_url = PAYPAL_CANCEL_URL or f"{settings.FRONTEND_URL}/upgrade?paypal=cancel"
 
-    session = await _stripe_post(
-        "checkout/sessions",
+    order = await _paypal_api_post(
+        "/v2/checkout/orders",
         {
-            "mode": "payment",
-            "success_url": success_url,
-            "cancel_url": cancel_url,
-            "customer_email": user.email,
-            "client_reference_id": str(user.id),
-            "metadata[user_id]": str(user.id),
-            "metadata[email]": user.email,
-            "metadata[upgrade_token]": user.upgrade_token,
-            "line_items[0][quantity]": 1,
-            "line_items[0][price_data][currency]": "usd",
-            "line_items[0][price_data][product_data][name]": "SiteWatcher Pro",
-            "line_items[0][price_data][product_data][description]": "50 sites, 1 minute checks, content monitoring, AI insights",
-            "line_items[0][price_data][unit_amount]": STRIPE_AMOUNT_USD,
+            "intent": "CAPTURE",
+            "purchase_units": [
+                {
+                    "reference_id": f"sitewatcher-pro-{user.id}",
+                    "custom_id": str(user.id),
+                    "description": "SiteWatcher Pro",
+                    "amount": {
+                        "currency_code": "USD",
+                        "value": PAYPAL_AMOUNT_USD,
+                    },
+                }
+            ],
+            "application_context": {
+                "brand_name": "SiteWatcher",
+                "user_action": "PAY_NOW",
+                "return_url": success_url,
+                "cancel_url": cancel_url,
+            },
         },
     )
 
-    return {"ok": True, "url": session["url"], "id": session["id"]}
+    approve_url = ""
+    for link in order.get("links", []):
+        if link.get("rel") == "approve":
+            approve_url = link.get("href") or ""
+            break
+
+    if not approve_url:
+        raise HTTPException(status_code=502, detail="PayPal error: no approve URL returned")
+
+    return {"ok": True, "url": approve_url, "id": order.get("id")}
 
 
-@router.post("/stripe-webhook")
-async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Stripe webhook events and activate Pro on successful payments."""
-    raw_body = await request.body()
-    signature = request.headers.get("Stripe-Signature", "")
+class PayPalCaptureRequest(BaseModel):
+    order_id: str
 
-    if not _verify_stripe_signature(raw_body, signature):
-        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
 
-    event = json.loads(raw_body.decode("utf-8"))
-    if event.get("type") != "checkout.session.completed":
-        return {"ok": True}
+@router.post("/paypal-capture")
+async def paypal_capture(req: PayPalCaptureRequest, user: User = Depends(get_current_active_user), db: AsyncSession = Depends(get_db)):
+    """Capture approved PayPal order and activate Pro."""
+    if user.is_paid:
+        return {"ok": True, "is_paid": True}
 
-    session = event.get("data", {}).get("object", {})
-    if session.get("payment_status") != "paid":
-        return {"ok": True}
+    order = await _paypal_api_post(f"/v2/checkout/orders/{req.order_id}/capture", {})
+    status_value = (order.get("status") or "").upper()
+    if status_value != "COMPLETED":
+        raise HTTPException(status_code=400, detail=f"PayPal order is not completed: {status_value or 'unknown'}")
 
-    metadata = session.get("metadata", {}) or {}
-    user_id = metadata.get("user_id")
-    email = metadata.get("email")
+    purchase_units = order.get("purchase_units") or []
+    first_unit = purchase_units[0] if purchase_units else {}
+    custom_id = str(first_unit.get("custom_id") or "")
+    if custom_id and custom_id != str(user.id):
+        raise HTTPException(status_code=403, detail="PayPal order does not belong to current user")
 
-    user = None
-    if user_id:
-        user = await db.get(User, int(user_id))
-    if not user and email:
-        result = await db.execute(select(User).where(User.email == email))
-        user = result.scalar_one_or_none()
+    captures = (((first_unit.get("payments") or {}).get("captures")) or [])
+    capture = captures[0] if captures else {}
+    amount_obj = capture.get("amount") or first_unit.get("amount") or {}
+    amount_value = amount_obj.get("value", PAYPAL_AMOUNT_USD)
+    currency = amount_obj.get("currency_code", "USD")
 
-    if not user:
-        return {"ok": True}
-
-    if not user.is_paid:
-        user.is_paid = True
-
+    user.is_paid = True
     payment = PaymentLog(
         user_id=user.id,
-        amount=float(session.get("amount_total", STRIPE_AMOUNT_USD)) / 100.0,
-        currency=(session.get("currency") or "usd").upper(),
-        payment_method="stripe",
-        external_id=session.get("id"),
-        comment="Stripe Checkout payment",
+        amount=float(amount_value),
+        currency=currency,
+        payment_method="paypal",
+        external_id=capture.get("id") or req.order_id,
+        comment="PayPal Checkout payment",
         status="success",
     )
     db.add(payment)
+    await db.commit()
+    await log_product_event(db, "upgraded_to_pro", user.id, {"source": "paypal", "order_id": req.order_id})
     await db.commit()
 
     if user.telegram_chat_id:
@@ -203,7 +205,7 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             "Thank you for your payment! 🚀",
         )
 
-    return {"ok": True}
+    return {"ok": True, "is_paid": True}
 
 
 # ── Admin activation ─────────────────────────────────────────────────────────
@@ -226,6 +228,8 @@ async def admin_activate(
 
     if not user.is_paid:
         user.is_paid = True
+        await db.commit()
+        await log_product_event(db, "upgraded_to_pro", user.id, {"source": "admin_activate"})
         await db.commit()
 
         if user.telegram_chat_id:
@@ -307,6 +311,8 @@ async def log_payment(
         status="success",
     )
     db.add(payment)
+    await db.commit()
+    await log_product_event(db, "upgraded_to_pro", user.id, {"source": data.get("method", "manual")})
     await db.commit()
 
     return {

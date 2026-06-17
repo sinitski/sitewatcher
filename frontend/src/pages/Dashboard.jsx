@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Radio, Settings, LogOut, Zap } from 'lucide-react'
+import { Plus, Radio, Settings, LogOut, Zap, Copy } from 'lucide-react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import api from '../api'
@@ -12,6 +12,8 @@ export default function Dashboard() {
   const [sites, setSites] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [statusSummary, setStatusSummary] = useState(null)
+  const [copiedStatus, setCopiedStatus] = useState(false)
 
   const fetchSites = async () => {
     try {
@@ -24,9 +26,25 @@ export default function Dashboard() {
 
   useEffect(() => { fetchSites() }, [])
 
+  const fetchStatusSummary = async () => {
+    try {
+      const { data } = await api.get('/status/me/summary')
+      setStatusSummary(data)
+    } catch {
+      setStatusSummary(null)
+    }
+  }
+
+  useEffect(() => { fetchStatusSummary() }, [])
+
   // Auto-refresh every 30s
   useEffect(() => {
     const id = setInterval(fetchSites, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(fetchStatusSummary, 60_000)
     return () => clearInterval(id)
   }, [])
 
@@ -34,6 +52,14 @@ export default function Dashboard() {
 
   const upCount = sites.filter((s) => s.last_status === 'up').length
   const downCount = sites.filter((s) => s.last_status === 'down').length
+  const overall = statusSummary?.overall_metrics || null
+
+  const copyPublicStatusUrl = async () => {
+    if (!statusSummary?.public_status_url) return
+    await navigator.clipboard.writeText(statusSummary.public_status_url)
+    setCopiedStatus(true)
+    setTimeout(() => setCopiedStatus(false), 1500)
+  }
 
   return (
     <div className="min-h-screen bg-surface">
@@ -86,6 +112,44 @@ export default function Dashboard() {
             <p className="text-xs text-gray-500 mt-0.5">Down</p>
           </div>
         </div>
+
+        {overall && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <div className="card text-center">
+              <p className="text-2xl font-bold text-brand-500">{overall.uptime_24h}%</p>
+              <p className="text-xs text-gray-500 mt-0.5">Uptime 24h</p>
+            </div>
+            <div className="card text-center">
+              <p className="text-2xl font-bold text-brand-500">{overall.uptime_7d}%</p>
+              <p className="text-xs text-gray-500 mt-0.5">Uptime 7d</p>
+            </div>
+            <div className="card text-center">
+              <p className="text-2xl font-bold text-amber-400">{overall.mttr_minutes_7d || 0}m</p>
+              <p className="text-xs text-gray-500 mt-0.5">MTTR 7d</p>
+            </div>
+            <div className="card text-center">
+              <p className="text-2xl font-bold text-red-400">{overall.incidents_7d || 0}</p>
+              <p className="text-xs text-gray-500 mt-0.5">Incidents 7d</p>
+            </div>
+          </div>
+        )}
+
+        {statusSummary?.first_incident_caught && statusSummary?.public_status_url && (
+          <div className="card mb-4 border-brand-500/30 bg-brand-500/5">
+            <h3 className="font-semibold text-brand-500 mb-1">Share your public status page</h3>
+            <p className="text-sm text-gray-400 mb-3">
+              You already caught incidents with SiteWatcher. Share your live status page and invite others with your referral code.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn-primary text-sm" onClick={copyPublicStatusUrl}>
+                <Copy size={14} className="inline mr-1" /> {copiedStatus ? 'Copied!' : 'Copy status link'}
+              </button>
+              <Link to="/settings" className="btn-ghost text-sm">
+                Share referral code
+              </Link>
+            </div>
+          </div>
+        )}
 
         {/* Header + Add */}
         <div className="flex items-center justify-between mb-4">

@@ -23,3 +23,4 @@ class User(Base):
     email_verification_expires_at = Column(DateTime, nullable=True)
     email_alerts_enabled = Column(Boolean, default=False)
     alert_emails = Column(String, nullable=True)
+    status_slug = Column(String, nullable=True, unique=True, index=True)

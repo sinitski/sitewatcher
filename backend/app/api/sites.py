@@ -13,6 +13,8 @@ from app.core.config import settings
 from app.services.auth import get_max_sites_for_user
 from app.services.scheduler import process_site_check
 from app.services.ai_analysis import suggest_response_threshold
+from app.services.events import log_product_event
+from app.services.audit import write_audit_log
 from sqlalchemy import delete as sql_delete
 
 router = APIRouter(prefix="/sites", tags=["sites"])
@@ -120,6 +122,20 @@ async def create_site(
     db.add(site)
     await db.commit()
     await db.refresh(site)
+
+    await write_audit_log(
+        db,
+        action="site_created",
+        resource_type="site",
+        actor_user_id=user.id,
+        resource_id=str(site.id),
+        new_value={"url": site.url, "name": site.name, "check_interval": site.check_interval},
+    )
+
+    if count == 0:
+        await log_product_event(db, "first_site_added", user.id, {"site_id": site.id})
+        await db.commit()
+
     return site_to_dict(site)
 
 
@@ -136,6 +152,7 @@ async def update_site(
 
     min_interval = settings.PAID_TIER_MIN_INTERVAL if user.is_paid else settings.FREE_TIER_MIN_INTERVAL
 
+    old = site_to_dict(site)
     for field, value in req.model_dump(exclude_none=True).items():
         if field == "check_interval":
             value = max(value, min_interval)
@@ -145,6 +162,16 @@ async def update_site(
 
     await db.commit()
     await db.refresh(site)
+    await write_audit_log(
+        db,
+        action="site_updated",
+        resource_type="site",
+        actor_user_id=user.id,
+        resource_id=str(site.id),
+        old_value=old,
+        new_value=site_to_dict(site),
+    )
+    await db.commit()
     return site_to_dict(site)
 
 @router.delete("/{site_id}")
@@ -157,10 +184,19 @@ async def delete_site(
     if not site or site.user_id != user.id:
         raise HTTPException(status_code=404, detail="Site not found")
     
+    old = site_to_dict(site)
     # Delete logs first
     await db.execute(sql_delete(CheckLog).where(CheckLog.site_id == site_id))
     # Then delete the site itself
     await db.delete(site)
+    await write_audit_log(
+        db,
+        action="site_deleted",
+        resource_type="site",
+        actor_user_id=user.id,
+        resource_id=str(site_id),
+        old_value=old,
+    )
     await db.commit()
     return {"ok": True}
 

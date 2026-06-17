@@ -52,12 +52,14 @@ const TESTIMONIALS = [
   },
 ]
 
-const FREE_FEATURES = ['1 site', 'Hourly checks', 'Uptime + response time', 'Telegram alerts']
+const FREE_FEATURES = ['1 site', 'Hourly checks', 'Uptime + response time', 'Telegram alerts', 'Email alerts: 1 per day']
 const PRO_FEATURES = [
   'Up to 50 sites',
   '1-minute checks',
   'Content change detection',
   'AI downtime analysis',
+  'AI root-cause hints in alerts',
+  'Email alerts: unlimited',
   'Weekly AI summaries',
   'Full check history',
 ]
@@ -111,8 +113,8 @@ function Hero() {
         </h1>
 
         <p className="text-lg text-gray-400 mb-8 max-w-xl mx-auto leading-relaxed">
-          SiteWatcher monitors your sites 24/7 and sends instant Telegram alerts.
-          AI analyzes patterns and explains what went wrong — in plain language.
+          Telegram-native monitoring for teams that live in chat.
+          Catch outages fast, then get AI root-cause hints in plain language.
         </p>
 
         <div className="flex items-center justify-center gap-3 flex-wrap">
@@ -131,7 +133,7 @@ function Hero() {
           </a>
         </div>
 
-        <p className="text-xs text-gray-600 mt-4">Free forever • No credit card • 1 site, hourly checks</p>
+        <p className="text-xs text-gray-600 mt-4">Free forever • No credit card • Email alerts: Free 1/day, Pro unlimited</p>
       </div>
     </section>
   )
@@ -239,6 +241,7 @@ function Pricing() {
       <div className="max-w-3xl mx-auto">
         <h2 className="text-2xl font-bold text-center mb-3">Simple pricing</h2>
         <p className="text-gray-500 text-center mb-12 text-sm">Start free. Upgrade when you're ready.</p>
+        <p className="text-xs text-amber-400 text-center mb-8">Email alerts policy: Free plan includes 1 alert per 24h, Pro is unlimited.</p>
         <div className="grid sm:grid-cols-2 gap-5">
           {/* Free */}
           <div className="card">

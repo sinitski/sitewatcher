@@ -2,3 +2,10 @@ from app.models.user import User
 from app.models.site import Site
 from app.models.check import CheckLog
 from app.models.payment import PaymentLog
+from app.models.incident import Incident
+from app.models.product_event import ProductEvent
+from app.models.organization import Organization
+from app.models.organization_member import OrganizationMember
+from app.models.audit_log import AuditLog
+from app.models.notification_channel import NotificationChannel
+from app.models.maintenance_window import MaintenanceWindow

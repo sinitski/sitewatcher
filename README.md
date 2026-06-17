@@ -1,9 +1,10 @@
 # 📡 SiteWatcher
 
-> Website uptime monitoring with real-time Telegram and email alerts.
+> Telegram-native website uptime monitoring with AI hints and email alerts.
 
 **Live demo (frontend):** https://sitewatcher-six.vercel.app
 **Live API (backend):** https://sitewatch-1k5k.onrender.com
+**Repository:** https://github.com/sinitski/sitewatcher
 
 ---
 
@@ -11,12 +12,13 @@
 
 - **Uptime monitoring** — checks your sites every 1–60 minutes
 - **Telegram alerts** — instant notifications when a site goes down or recovers
-- **Email alerts** — optional additional notifications via Resend
+- **Email alerts** — optional additional notifications via Gmail API
 - **Email confirmation** — new accounts must confirm their address before signing in
 - **Response time tracking** — detects slow responses before users notice
 - **Content change detection** — alerts when page content changes (Pro)
 - **Check history** — full log with response times and status codes
 - **Freemium model** — free tier for 1 site, Pro for up to 50
+- **Enterprise foundations** — org RBAC, audit logs, webhook/Slack channels, SLO exports, SCIM users API
 
 ---
 
@@ -29,7 +31,7 @@
 | Auth | JWT (python-jose) + bcrypt |
 | HTTP checks | httpx (async) |
 | Content diff | BeautifulSoup4 + MD5 hash |
-| Notifications | Telegram Bot API + Resend |
+| Notifications | Telegram Bot API + Gmail API |
 | Payments | Telegram Stars |
 | Frontend | React 18, Vite, Tailwind CSS |
 | Deploy | Docker, Render.com |
@@ -65,7 +67,7 @@ sitewatcher/
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/epetrovich0/sitewatcher.git
+git clone https://github.com/sinitski/sitewatcher.git
 cd sitewatcher
 cp backend/.env.example backend/.env
 ```
@@ -76,12 +78,32 @@ Edit `backend/.env`:
 DATABASE_URL=postgresql+asyncpg://user:password@db:5432/sitewatcher
 SECRET_KEY=your-secret-key-here
 TELEGRAM_BOT_TOKEN=your-bot-token
-RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
-RESEND_FROM_EMAIL=no-reply@example.com
-RESEND_FROM_NAME=SiteWatcher
+GMAIL_CLIENT_ID=xxxxxxxxxxxxxxxx.apps.googleusercontent.com
+GMAIL_CLIENT_SECRET=xxxxxxxxxxxxxxxx
+GMAIL_REFRESH_TOKEN=xxxxxxxxxxxxxxxx
+GMAIL_SENDER_EMAIL=your@gmail.com
 FRONTEND_URL=http://localhost:5173
 ADMIN_SECRET=your-admin-secret
 ENV=development
+
+# Optional hardening/reliability settings
+CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
+RATE_LIMIT_LOGIN_PER_MINUTE=30
+RATE_LIMIT_REGISTER_PER_MINUTE=10
+RATE_LIMIT_VERIFICATION_PER_MINUTE=10
+SCHEDULER_MAX_CONCURRENT_CHECKS=20
+CHECK_RETRY_COUNT=1
+CHECK_RETRY_BACKOFF_SECONDS=2
+NEXT_CHECK_JITTER_SECONDS=20
+CONTENT_CHANGE_ALERT_COOLDOWN_MINUTES=30
+CHECK_LOCATIONS=edge-a,edge-b
+
+# Enterprise (optional)
+OIDC_AUTH_URL=
+OIDC_CLIENT_ID=
+OIDC_REDIRECT_URI=
+SCIM_BEARER_TOKEN=
+LOG_RETENTION_DAYS=90
 ```
 
 ### 2. Start
@@ -95,6 +117,8 @@ docker compose up --build
 | Frontend | http://localhost:5173 |
 | Backend API | http://localhost:8000 |
 | API Docs | http://localhost:8000/docs |
+| Health Live | http://localhost:8000/health/live |
+| Health Ready | http://localhost:8000/health/ready |
 
 ### 3. Register Telegram webhook (for alerts)
 
@@ -123,8 +147,22 @@ POST /api/sites/{id}/check-now   Trigger immediate check
 GET  /api/sites/{id}/logs   Check history
 
 POST /api/billing/send-invoice       Pay with Telegram Stars
-POST /api/billing/stripe-checkout     Pay with Stripe Checkout
+POST /api/billing/paypal-checkout     Pay with PayPal Checkout
+POST /api/billing/paypal-capture      Capture PayPal order after return
 POST /api/billing/admin/activate/{email}?secret=  Manual Pro activation
+
+GET  /api/status/{slug}       Public status page data
+GET  /api/status/me/summary   Authenticated status summary and growth metrics
+
+POST /api/enterprise/orgs                      Create organization
+GET  /api/enterprise/orgs                      List organizations for current user
+POST /api/enterprise/orgs/{id}/members         Add/update org member
+GET  /api/enterprise/orgs/{id}/audit           Immutable audit logs
+POST /api/enterprise/orgs/{id}/channels        Add Slack/webhook channel
+POST /api/enterprise/orgs/{id}/maintenance     Add maintenance window
+GET  /api/enterprise/orgs/{id}/slo-summary     SLO summary
+GET  /api/enterprise/orgs/{id}/slo-export.csv  SLA/SLO CSV export
+GET  /api/enterprise/scim/v2/Users             SCIM Users (read-only)
 ```
 
 ---
@@ -162,13 +200,15 @@ SECRET_KEY           # Random string for JWT signing
 TELEGRAM_BOT_TOKEN   # From @BotFather
 FRONTEND_URL         # https://sitewatcher-six.vercel.app
 ADMIN_SECRET         # Secret for manual Pro activation
-STRIPE_SECRET_KEY    # Stripe secret key
-STRIPE_WEBHOOK_SECRET # Stripe webhook signing secret
-STRIPE_SUCCESS_URL   # Stripe success redirect URL
-STRIPE_CANCEL_URL    # Stripe cancel redirect URL
-RESEND_API_KEY       # Resend API key (resend.com)
-RESEND_FROM_EMAIL    # Verified sender email
-RESEND_FROM_NAME     # Optional sender display name
+PAYPAL_CLIENT_ID     # PayPal REST client id
+PAYPAL_CLIENT_SECRET # PayPal REST client secret
+PAYPAL_MODE          # sandbox or live
+PAYPAL_SUCCESS_URL   # PayPal success redirect URL
+PAYPAL_CANCEL_URL    # PayPal cancel redirect URL
+GMAIL_CLIENT_ID      # Google OAuth client id
+GMAIL_CLIENT_SECRET  # Google OAuth client secret
+GMAIL_REFRESH_TOKEN  # Google OAuth refresh token with gmail.send scope
+GMAIL_SENDER_EMAIL   # Sender email in Gmail account
 ENV                  # production (hides /docs)
 ```
 
@@ -184,10 +224,11 @@ ENV                  # production (hides /docs)
 | Response time alerts | ✅ | ✅ |
 | Content change detection | ❌ | ✅ |
 | Telegram alerts | ✅ | ✅ |
+| Email alerts | 1/day | Unlimited |
 
 **Payment options:**
 - Telegram Stars (instant, built-in)
-- Stripe Checkout (card payment)
+- PayPal Checkout (international card payment)
 
 ---
 

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Check, Zap, CreditCard, ExternalLink } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import api from '../api'
 
@@ -10,6 +10,7 @@ const FREE_FEATURES = [
   'Up/down monitoring',
   'Response time tracking',
   'Telegram alerts',
+  'Email alerts: 1 per 24h',
 ]
 
 const PRO_FEATURES = [
@@ -17,7 +18,9 @@ const PRO_FEATURES = [
   'Checks every 1 minute',
   'Content change detection',
   'Response time alerts',
-  'Priority Telegram alerts',
+  'Telegram-native incident alerts',
+  'AI root-cause hints',
+  'Email alerts: unlimited',
   'Full check history',
   'AI insights',
 ]
@@ -26,12 +29,51 @@ const PRICE_STARS = 500
 const PRICE_USD_LABEL = '$9.99'
 
 export default function UpgradePage() {
-  const { user } = useAuth()
+  const { user, refetchUser } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [loadingStars, setLoadingStars] = useState(false)
-  const [loadingStripe, setLoadingStripe] = useState(false)
+  const [loadingPayPal, setLoadingPayPal] = useState(false)
+  const [processingPayPal, setProcessingPayPal] = useState(false)
   const [error, setError] = useState('')
   const [successStars, setSuccessStars] = useState(false)
+  const [payPalSuccess, setPayPalSuccess] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const paypalStatus = params.get('paypal')
+    const orderId = params.get('token')
+
+    if (paypalStatus !== 'success' || !orderId) return
+
+    let cancelled = false
+
+    const capture = async () => {
+      setProcessingPayPal(true)
+      setError('')
+      try {
+        await api.post('/billing/paypal-capture', { order_id: orderId })
+        await refetchUser()
+        if (!cancelled) {
+          setPayPalSuccess('PayPal payment confirmed. Pro is now active.')
+          navigate('/upgrade', { replace: true })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.response?.data?.detail || 'Failed to confirm PayPal payment')
+        }
+      } finally {
+        if (!cancelled) {
+          setProcessingPayPal(false)
+        }
+      }
+    }
+
+    capture()
+    return () => {
+      cancelled = true
+    }
+  }, [location.search, navigate])
 
   const payWithStars = async () => {
     if (!user?.telegram_chat_id) {
@@ -50,16 +92,16 @@ export default function UpgradePage() {
     }
   }
 
-  const payWithStripe = async () => {
-    setLoadingStripe(true)
+  const payWithPayPal = async () => {
+    setLoadingPayPal(true)
     setError('')
     try {
-      const { data } = await api.post('/billing/stripe-checkout')
+      const { data } = await api.post('/billing/paypal-checkout')
       window.open(data.url, '_blank', 'noopener,noreferrer')
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to create Stripe checkout')
+      setError(err.response?.data?.detail || 'Failed to create PayPal checkout')
     } finally {
-      setLoadingStripe(false)
+      setLoadingPayPal(false)
     }
   }
 
@@ -85,7 +127,8 @@ export default function UpgradePage() {
 
         <div className="text-center mb-10">
           <h1 className="text-3xl font-bold mb-2">Simple pricing</h1>
-          <p className="text-gray-500">Start free, upgrade when you need more.</p>
+          <p className="text-gray-500">Telegram-native monitoring with AI hints. Start free, upgrade when you need scale.</p>
+          <p className="text-xs text-amber-400 mt-2">Email alerts policy: Free 1 per 24h, Pro unlimited.</p>
         </div>
 
         <div className="grid md:grid-cols-2 gap-5">
@@ -118,6 +161,7 @@ export default function UpgradePage() {
             </ul>
 
             {error && <p className="text-sm text-red-400 mb-3 text-center">{error}</p>}
+            {payPalSuccess && <p className="text-sm text-green-400 mb-3 text-center">{payPalSuccess}</p>}
 
             <div className="mb-3">
               <p className="text-xs text-gray-500 mb-1">Option 1 - instant payment</p>
@@ -153,18 +197,18 @@ export default function UpgradePage() {
             </div>
 
             <div>
-              <p className="text-xs text-gray-500 mb-1">Option 2 - card payment via Stripe</p>
+              <p className="text-xs text-gray-500 mb-1">Option 2 - international payment via PayPal</p>
               <button
                 className="btn-ghost w-full flex items-center justify-center gap-2 border border-gray-700"
-                onClick={payWithStripe}
-                disabled={loadingStripe}
+                onClick={payWithPayPal}
+                disabled={loadingPayPal || processingPayPal}
               >
                 <CreditCard size={15} />
-                {loadingStripe ? 'Opening…' : 'Pay with Stripe'}
+                {processingPayPal ? 'Confirming…' : loadingPayPal ? 'Opening…' : 'Pay with PayPal'}
                 <ExternalLink size={12} className="text-gray-500" />
               </button>
               <p className="text-xs text-gray-600 text-center mt-1">
-                Card payment with automatic Pro activation after checkout
+                International card payment with automatic Pro activation after checkout
               </p>
             </div>
           </div>

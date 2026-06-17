@@ -57,6 +57,9 @@ function SiteRow({ site }) {
           <p style={styles.uptime}>
             {site.uptime_30d}% uptime
           </p>
+          <p style={styles.uptime}>{site.uptime_7d}% (7d)</p>
+          <p style={styles.uptime}>Incidents 7d: {site.incidents_7d || 0}</p>
+          <p style={styles.uptime}>MTTR 7d: {site.mttr_minutes_7d || 0}m</p>
           {site.last_response_time && (
             <p style={styles.uptime}>{Math.round(site.last_response_time * 1000)}ms</p>
           )}
@@ -112,6 +115,27 @@ export default function StatusPage() {
           </p>
         </div>
 
+        {data.overall_metrics && (
+          <div style={styles.metricsGrid}>
+            <div style={styles.metricCard}>
+              <p style={styles.metricValue}>{data.overall_metrics.uptime_24h}%</p>
+              <p style={styles.metricLabel}>Uptime 24h</p>
+            </div>
+            <div style={styles.metricCard}>
+              <p style={styles.metricValue}>{data.overall_metrics.uptime_7d}%</p>
+              <p style={styles.metricLabel}>Uptime 7d</p>
+            </div>
+            <div style={styles.metricCard}>
+              <p style={styles.metricValue}>{data.overall_metrics.mttr_minutes_7d || 0}m</p>
+              <p style={styles.metricLabel}>MTTR 7d</p>
+            </div>
+            <div style={styles.metricCard}>
+              <p style={styles.metricValue}>{data.overall_metrics.incidents_7d || 0}</p>
+              <p style={styles.metricLabel}>Incidents 7d</p>
+            </div>
+          </div>
+        )}
+
         {/* Sites */}
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>Monitored Services</h2>
@@ -147,6 +171,10 @@ const styles = {
   title:       { color: '#f1f5f9', fontSize: 28, fontWeight: 700, margin: 0 },
   subtitle:    { color: '#64748b', fontSize: 14, marginTop: 4 },
   overallCard: { background: '#0f172a', border: '1px solid', borderRadius: 12, padding: '16px 20px', marginBottom: 16 },
+  metricsGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginBottom: 16 },
+  metricCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 10, padding: '12px 14px' },
+  metricValue: { color: '#e2e8f0', fontSize: 20, fontWeight: 700, margin: 0 },
+  metricLabel: { color: '#64748b', fontSize: 11, margin: '4px 0 0' },
   card:        { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: '16px 20px', marginBottom: 16 },
   sectionTitle:{ color: '#94a3b8', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16, margin: '0 0 16px' },
   siteRow:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '10px 0' },

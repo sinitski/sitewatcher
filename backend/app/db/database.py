@@ -21,7 +21,7 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     async with engine.begin() as conn:
-        from app.models import user, site, check  # noqa: F401
+        from app.models import user, site, check, payment, incident, product_event, organization, organization_member, audit_log, notification_channel, maintenance_window  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
         def ensure_user_referral_columns(sync_conn):
@@ -38,6 +38,8 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN email_alerts_enabled BOOLEAN NOT NULL DEFAULT FALSE")
             if "alert_emails" not in columns:
                 sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN alert_emails VARCHAR")
+            if "status_slug" not in columns:
+                sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN status_slug VARCHAR")
 
             if "referral_code" not in columns:
                 sync_conn.exec_driver_sql("ALTER TABLE users ADD COLUMN referral_code VARCHAR")
@@ -68,6 +70,9 @@ async def init_db():
                 sync_conn.exec_driver_sql(
                     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email_verification_token ON users (email_verification_token)"
                 )
+                sync_conn.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_status_slug ON users (status_slug)"
+                )
             elif dialect == "sqlite":
                 index_rows = sync_conn.exec_driver_sql("PRAGMA index_list('users')").fetchall()
                 index_names = {row[1] for row in index_rows}
@@ -79,6 +84,36 @@ async def init_db():
                     sync_conn.exec_driver_sql(
                         "CREATE UNIQUE INDEX ix_users_email_verification_token ON users (email_verification_token)"
                     )
+                if "ix_users_status_slug" not in index_names:
+                    sync_conn.exec_driver_sql(
+                        "CREATE UNIQUE INDEX ix_users_status_slug ON users (status_slug)"
+                    )
+
+            users_without_slug = sync_conn.exec_driver_sql(
+                "SELECT id, email FROM users WHERE status_slug IS NULL OR status_slug = ''"
+            ).fetchall()
+            for row in users_without_slug:
+                user_id = row[0]
+                email = row[1] or ""
+                slug = email.split("@")[0].lower().replace(" ", "-") if "@" in email else f"u{user_id}"
+                slug = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in slug).strip("-")
+                if not slug:
+                    slug = f"u{user_id}"
+                suffix = 1
+                candidate = slug
+                while True:
+                    exists = sync_conn.execute(
+                        text("SELECT 1 FROM users WHERE status_slug = :slug AND id != :id"),
+                        {"slug": candidate, "id": user_id},
+                    ).fetchone()
+                    if not exists:
+                        break
+                    suffix += 1
+                    candidate = f"{slug}-{suffix}"
+                sync_conn.execute(
+                    text("UPDATE users SET status_slug = :slug WHERE id = :id"),
+                    {"slug": candidate, "id": user_id},
+                )
 
         await conn.run_sync(ensure_user_referral_columns)
 

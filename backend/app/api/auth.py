@@ -18,6 +18,8 @@ from app.services.auth import (
 from app.core.config import settings
 from app.services.telegram import send_telegram_message
 from app.services.email import normalize_email_list, send_verification_email, split_email_list
+from app.services.rate_limit import rate_limit
+from app.services.events import log_product_event
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer = HTTPBearer()
@@ -97,8 +99,32 @@ def _build_verification_url(request: Request, token: str) -> str:
     return f"{base}/api/auth/verify-email?token={token}"
 
 
+def _slugify_email(email: str) -> str:
+    local = email.split("@")[0].lower()
+    slug = "".join(ch if ch.isalnum() or ch == "-" else "-" for ch in local).strip("-")
+    return slug or "user"
+
+
+async def _unique_status_slug(db: AsyncSession, email: str) -> str:
+    base = _slugify_email(email)
+    candidate = base
+    suffix = 1
+    while True:
+        result = await db.execute(select(User).where(User.status_slug == candidate))
+        existing = result.scalar_one_or_none()
+        if not existing:
+            return candidate
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+
+
 @router.post("/register")
-async def register(req: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def register(
+    req: RegisterRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _rl=Depends(rate_limit("register", settings.RATE_LIMIT_REGISTER_PER_MINUTE, 60)),
+):
     existing = await get_user_by_email(db, req.email)
     if existing:
         if existing.email_verified:
@@ -134,11 +160,14 @@ async def register(req: RegisterRequest, request: Request, db: AsyncSession = De
 
     verification_token, verification_expires_at = _create_email_verification_token()
 
+    status_slug = await _unique_status_slug(db, req.email)
+
     user = User(
         email=req.email,
         hashed_password=hash_password(req.password),
         upgrade_token=generate_upgrade_token(),
         referral_code=await generate_unique_referral_code(db),
+        status_slug=status_slug,
         email_verified=False,
         email_verification_token=verification_token,
         email_verification_expires_at=verification_expires_at,
@@ -162,11 +191,17 @@ async def register(req: RegisterRequest, request: Request, db: AsyncSession = De
         )
 
     await db.commit()
+    await log_product_event(db, "user_registered", user.id, {"email_domain": req.email.split("@")[-1]})
+    await db.commit()
     return {"ok": True, "message": "Check your inbox to confirm your email address before signing in."}
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    req: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+    _rl=Depends(rate_limit("login", settings.RATE_LIMIT_LOGIN_PER_MINUTE, 60)),
+):
     user = await authenticate_user(db, req.email, req.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -186,6 +221,7 @@ async def me(user: User = Depends(get_current_active_user)):
         "email_verified": user.email_verified,
         "telegram_chat_id": user.telegram_chat_id,
         "telegram_username": user.telegram_username,
+        "status_slug": user.status_slug,
         "upgrade_token": user.upgrade_token,
         "referral": {
             "code": user.referral_code,
@@ -223,7 +259,12 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/verification-email")
-async def send_verification_email_again(req: VerificationEmailRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def send_verification_email_again(
+    req: VerificationEmailRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _rl=Depends(rate_limit("verification", settings.RATE_LIMIT_VERIFICATION_PER_MINUTE, 60)),
+):
     result = await db.execute(select(User).where(User.email == req.email))
     user = result.scalar_one_or_none()
     if not user:
